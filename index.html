@@ -390,6 +390,9 @@ table.log{width:100%;border-collapse:collapse;font-size:13.5px;font-variant-nume
           <tfoot id="logFoot"></tfoot>
         </table>
       </div>
+      <h3 class="h">Export</h3>
+      <button type="button" class="btn small" id="btnGpx">Fahrt als GPX speichern</button>
+      <p class="note">Die GPX-Datei enthält die simulierte Fahrt mit einem Punkt pro Sekunde und Zeitstempeln ab der gewählten Abfahrt. Kartenprogramme und Entwickler-Werkzeuge, die GPS-Tracks abspielen, können sie öffnen.</p>
     </div>
   </div>
 </section>
@@ -1117,6 +1120,44 @@ function drawChart() {
   ctx.fillStyle = col.fg; ctx.beginPath(); ctx.arc(cx, Y(at.v * 3.6), 3.5, 0, Math.PI * 2); ctx.fill();
 }
 window.addEventListener('resize', () => drawChart());
+
+/* ---------- GPX-Export ---------- */
+function slug(s) {
+  return String(s).toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'ort';
+}
+function buildGpx(name) {
+  const P = state.P, dep = depTime();
+  const iso = ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const pts = [];
+  // ein Punkt pro Sekunde Fahrzeit, Position und Zeit aus dem Fahrprofil
+  for (let k = 0, n = Math.ceil(P.total); k <= n; k++) {
+    const t = Math.min(k, P.total), p = pointAt(atTime(P, t).s);
+    pts.push(`      <trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"><time>${iso(dep + t * 1000)}</time></trkpt>`);
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Fahrsimulator" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><name>${esc(name)}</name><time>${iso(dep)}</time></metadata>
+  <trk>
+    <name>${esc(name)}</name>
+    <trkseg>
+${pts.join('\n')}
+    </trkseg>
+  </trk>
+</gpx>
+`;
+}
+$('#btnGpx').addEventListener('click', () => {
+  if (!state.P) { toast('Bitte zuerst eine Route berechnen'); return; }
+  const from = ui.inFrom.value.trim() || 'Start', to = state.toLabel || ui.inTo.value.trim() || 'Ziel';
+  const blob = new Blob([buildGpx(`${from} → ${to}`)], { type: 'application/gpx+xml' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `fahrt-${slug(from)}-${slug(to)}.gpx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast(`GPX gespeichert: ${words(state.P.total)}, ${km(state.route.total)} km`);
+});
 
 /* ---------- Route laden ---------- */
 function setMsg(text, isError) { ui.msg.textContent = text || ''; ui.msg.classList.toggle('error', !!isError); }
