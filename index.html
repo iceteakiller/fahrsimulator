@@ -1,0 +1,1335 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fahrsimulator</title>
+<meta name="description" content="Simuliert eine Autofahrt auf einer frei gewählten Route mit eigenem Tempo pro Abschnitt.">
+<meta name="theme-color" content="#0e518d">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Fahrsimulator">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+/* Layout: Karte oben, darunter ein festes Bedienfeld (Player + Tabs); ab 900px Bedienfeld links, Karte rechts */
+:root{
+  --bg:#e9edf2;
+  --surface:#ffffff;
+  --surface-2:#f1f4f8;
+  --fg:#121821;
+  --muted:#5a6575;
+  --line:#d6dce4;
+  --accent:#0e518d;
+  --accent-fg:#ffffff;
+  --accent-soft:#e2ecf7;
+  --road-a:#1f63c6;
+  --road-b:#d99a00;
+  --road-l:#13836c;
+  --road-o:#6a6f88;
+  --casing:#ffffff;
+  --driven:#9aa3af;
+  --danger:#c1121c;
+  --sign-red:#c8102e;
+  --sign-white:#ffffff;
+  --sign-ink:#111111;
+  --sign-blue:#0e518d;
+  --sign-yellow:#f6b800;
+  --shadow:0 4px 18px rgba(12,24,40,.16);
+  --tile-filter:saturate(.85);
+  --font-ui:"Barlow", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-num:"Barlow Condensed", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0c1016; --surface:#141a22; --surface-2:#1b222c; --fg:#e6ebf1; --muted:#8f9aa9; --line:#2a323d;
+    --accent:#5c9fe8; --accent-fg:#06121f; --accent-soft:#16283d;
+    --road-a:#4a8ef0; --road-b:#f0b419; --road-l:#2bb592; --road-o:#a3a8c0;
+    --casing:#05070a; --driven:#4a5361; --danger:#ff6b6f; --shadow:0 4px 18px rgba(0,0,0,.5);
+    --tile-filter:invert(1) hue-rotate(180deg) saturate(.55) brightness(.85) contrast(.9);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0c1016; --surface:#141a22; --surface-2:#1b222c; --fg:#e6ebf1; --muted:#8f9aa9; --line:#2a323d;
+  --accent:#5c9fe8; --accent-fg:#06121f; --accent-soft:#16283d;
+  --road-a:#4a8ef0; --road-b:#f0b419; --road-l:#2bb592; --road-o:#a3a8c0;
+  --casing:#05070a; --driven:#4a5361; --danger:#ff6b6f; --shadow:0 4px 18px rgba(0,0,0,.5);
+  --tile-filter:invert(1) hue-rotate(180deg) saturate(.55) brightness(.85) contrast(.9);
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{
+  background:var(--bg);color:var(--fg);font:15px/1.4 var(--font-ui);
+  display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;height:100vh;height:100dvh;overflow:hidden;
+  -webkit-tap-highlight-color:transparent;
+}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.pad-x{padding-left:max(16px, env(safe-area-inset-left,0px));padding-right:max(16px, env(safe-area-inset-right,0px))}
+
+/* Karte */
+.map-wrap{position:relative;min-height:0;grid-row:1}
+#map{position:absolute;inset:0;background:var(--surface-2)}
+.leaflet-container{font-family:var(--font-ui)}
+.leaflet-control-attribution{font-size:10px}
+.leaflet-bar a{background:var(--surface);color:var(--fg);border-color:var(--line)}
+.base-tiles{filter:var(--tile-filter)}
+
+.hud{
+  position:absolute;z-index:600;
+  top:calc(10px + env(safe-area-inset-top,0px));left:calc(10px + env(safe-area-inset-left,0px));
+  max-width:min(320px, calc(100% - 80px));
+  background:var(--surface);border-radius:16px;box-shadow:var(--shadow);padding:10px 12px;
+  display:grid;grid-template-columns:auto auto;justify-content:start;gap:6px 12px;align-items:center;
+}
+.gauge{display:flex;align-items:baseline;gap:4px}
+.gauge-v{font:700 46px/.9 var(--font-num);font-variant-numeric:tabular-nums;min-width:2.1ch;text-align:right}
+.gauge-u{font-size:12px;color:var(--muted);font-weight:600}
+.sign{
+  --d:40px;width:var(--d);height:var(--d);border-radius:50%;flex:none;
+  background:var(--sign-white);border:calc(var(--d)*.12) solid var(--sign-red);color:var(--sign-ink);
+  display:grid;place-items:center;font:700 calc(var(--d)*.4)/1 var(--font-num);letter-spacing:-.02em;
+}
+.hud-road{grid-column:1/-1;display:flex;gap:8px;align-items:center;min-width:0;font-weight:600}
+.hud-road > span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.hud-next{grid-column:1/-1;font-size:12.5px;color:var(--muted);display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+
+.map-btns{position:absolute;z-index:600;right:calc(10px + env(safe-area-inset-right,0px));top:calc(10px + env(safe-area-inset-top,0px));display:flex;flex-direction:column;gap:8px}
+.map-btn{width:44px;height:44px;border-radius:12px;border:0;background:var(--surface);color:var(--fg);box-shadow:var(--shadow);display:grid;place-items:center}
+.map-btn svg{width:22px;height:22px}
+.map-btn[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
+.gps{position:absolute;z-index:500;left:calc(8px + env(safe-area-inset-left,0px));bottom:8px;background:var(--surface);color:var(--muted);border-radius:8px;padding:3px 8px;font:500 11px/1.3 var(--font-ui);font-variant-numeric:tabular-nums;box-shadow:var(--shadow)}
+.banner{
+  position:absolute;z-index:650;left:calc(10px + env(safe-area-inset-left,0px));right:calc(62px + env(safe-area-inset-right,0px));bottom:36px;
+  display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--fg);color:var(--bg);border-radius:14px;padding:8px 8px 8px 14px;box-shadow:var(--shadow);font-weight:600;font-size:14px
+}
+.banner .btn{height:36px;background:var(--bg);color:var(--fg);border:0}
+.toast{position:absolute;z-index:700;left:50%;top:calc(130px + env(safe-area-inset-top,0px));transform:translateX(-50%);max-width:calc(100% - 32px);width:max-content;background:var(--fg);color:var(--bg);border-radius:12px;padding:9px 14px;font-weight:600;font-size:14px;box-shadow:var(--shadow);text-align:center}
+body.splitting #map{cursor:crosshair}
+
+.car{width:44px;height:44px}
+.car-rot{width:100%;height:100%;transition:transform .18s linear}
+.car svg{width:100%;height:100%;display:block;overflow:visible}
+.car-halo{fill:var(--accent);opacity:.2}
+.car-arrow{fill:var(--accent);stroke:var(--sign-white);stroke-width:2.5;stroke-linejoin:round;filter:drop-shadow(0 2px 2px rgba(0,0,0,.35))}
+.pin{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--surface);border:3px solid var(--fg);font:700 13px/1 var(--font-num);color:var(--fg);box-shadow:var(--shadow)}
+.pin.end{background:var(--fg);color:var(--surface)}
+
+/* Bedienfeld */
+.sheet{
+  grid-row:2;min-width:0;height:56vh;height:min(56dvh,600px);display:flex;flex-direction:column;min-height:0;
+  background:var(--surface);border-top:1px solid var(--line);box-shadow:0 -6px 20px rgba(12,24,40,.1);position:relative;z-index:800;
+}
+body.sheet-min .sheet{height:auto}
+body.sheet-min .tabs,body.sheet-min .scroll{display:none}
+.grab{display:block;margin:4px auto 0;width:64px;height:18px;border:0;background:none;padding:0;flex:none}
+.grab::before{content:"";display:block;margin:auto;width:40px;height:5px;border-radius:3px;background:var(--line)}
+.player{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center;padding-block:2px 4px;flex:none}
+.play{width:56px;height:56px;border-radius:50%;border:0;background:var(--accent);color:var(--accent-fg);display:grid;place-items:center;box-shadow:var(--shadow)}
+.play svg{width:26px;height:26px}
+.icon-btn{width:44px;height:44px;flex:none;border-radius:12px;border:1px solid var(--line);background:var(--surface-2);display:grid;place-items:center;padding:0}
+.icon-btn svg{width:20px;height:20px}
+.prog{min-width:0}
+.prog-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px}
+.prog-top b{font:600 24px/1 var(--font-num);color:var(--fg)}
+input[type=range]{width:100%;accent-color:var(--accent);margin:6px 0 2px}
+.stats{display:flex;gap:6px 16px;flex-wrap:wrap;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;padding-block:2px 6px;flex:none}
+.stats b{color:var(--fg);font-weight:600}
+.mults{display:flex;align-items:center;gap:5px;overflow-x:auto;padding-block:2px 10px;scrollbar-width:none;flex:none}
+.mults::-webkit-scrollbar{display:none}
+.lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;white-space:nowrap}
+.mults .lbl{margin-right:4px}
+.chip{border:1px solid var(--line);background:var(--surface-2);border-radius:999px;padding:5px 9px;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums;flex:none}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.tabs{display:flex;border-bottom:1px solid var(--line);flex:none}
+.tab{flex:1;border:0;background:none;padding:10px 4px 9px;font-weight:600;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-1px}
+.tab[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+.scroll{flex:1;min-height:0;overflow-y:auto;padding-block:14px calc(24px + env(safe-area-inset-bottom,0px));overscroll-behavior:contain}
+
+/* Route */
+.form{display:grid;gap:12px}
+.field{position:relative;display:grid;gap:4px}
+.field > label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.opt{text-transform:none;letter-spacing:0;font-weight:500}
+.inwrap{display:flex;gap:6px}
+.inwrap input{flex:1;min-width:0;height:44px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);padding:0 12px;font-size:16px}
+.inwrap input:focus{outline:2px solid var(--accent);outline-offset:0;background:var(--surface)}
+.suggest{position:absolute;z-index:30;top:100%;left:0;right:0;margin:4px 0 0;padding:4px;list-style:none;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);max-height:250px;overflow:auto}
+.suggest li{padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:600}
+.suggest li.on,.suggest li:hover{background:var(--accent-soft)}
+.suggest small{display:block;color:var(--muted);font-size:12px;font-weight:500}
+.btn{height:44px;border-radius:12px;border:1px solid var(--line);background:var(--surface-2);padding:0 16px;font-weight:600}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.btn.small{height:36px;padding:0 12px;font-size:14px}
+.btn[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.msg{margin:0;font-size:14px;color:var(--muted);min-height:1.4em}
+.msg.error{color:var(--danger);font-weight:600}
+.h{font:600 11px/1.2 var(--font-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:20px 0 8px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.alts{display:grid;gap:8px;margin-top:4px}
+.alt{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface);width:100%}
+.alt .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--muted)}
+.alt[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft)}
+.alt[aria-pressed="true"] .dot{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 0 4px,transparent 5px)}
+.alt b{font:600 20px/1 var(--font-num);font-variant-numeric:tabular-nums}
+.alt small{display:block;color:var(--muted);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alt .meta{color:var(--muted);font-size:14px}
+.seg{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.seg button{flex:1;border:0;background:var(--surface-2);padding:10px 6px;font-weight:600}
+.seg button + button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
+.check{display:flex;gap:10px;align-items:center;margin:12px 0;font-size:14.5px}
+.check input{width:20px;height:20px;accent-color:var(--accent);flex:none}
+.note{font-size:13px;color:var(--muted);margin:16px 0 0;max-width:62ch}
+.note.top{margin:0 0 12px}
+#dep{max-width:160px}
+
+/* Abschnitte */
+.tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.quick{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.quick .lbl{width:100%}
+.secs{display:grid;gap:10px}
+.sec{border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+.sec.is-sel{background:var(--accent-soft)}
+.sec.is-current{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.sec-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;width:100%;border:0;background:none;padding:10px 12px 2px;text-align:left;border-radius:14px 14px 0 0}
+.sec-title{min-width:0}
+.sec-title b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sec-title small{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums}
+.sec-time{text-align:right;font:600 19px/1 var(--font-num);font-variant-numeric:tabular-nums}
+.sec-time small{display:block;font:500 11px/1.4 var(--font-ui);color:var(--muted)}
+.sec-ctrl{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:4px 12px}
+.step{width:38px;height:38px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);font-size:20px;line-height:1;padding:0}
+.sec-ctrl .sign{--d:44px;margin-left:2px}
+.sec-foot{display:flex;gap:4px;align-items:center;padding:0 8px 6px 12px;font-size:12.5px;color:var(--muted)}
+.sec-foot .sp{flex:1}
+.link-btn{border:0;background:none;color:var(--accent);font-weight:600;padding:8px 6px;font-size:14px}
+
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:36px;height:23px;padding:0 6px;border-radius:5px;font:700 15px/1 var(--font-num);letter-spacing:.02em;white-space:nowrap;flex:none}
+.badge.sm{min-width:30px;height:19px;font-size:13px;padding:0 4px}
+.badge-A{background:var(--sign-blue);color:var(--sign-white);box-shadow:inset 0 0 0 1.5px var(--sign-white),0 0 0 1px var(--sign-blue)}
+.badge-B{background:var(--sign-yellow);color:var(--sign-ink);box-shadow:inset 0 0 0 1.5px var(--sign-ink)}
+.badge-L,.badge-K{background:var(--sign-white);color:var(--sign-ink);box-shadow:inset 0 0 0 1.5px var(--sign-ink)}
+.badge-O{background:var(--surface-2);color:var(--muted);box-shadow:inset 0 0 0 1px var(--line);font:600 11px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase}
+
+/* Auswertung */
+.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.tile{background:var(--surface-2);border-radius:12px;padding:10px 12px;min-width:0}
+.tile span{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.tile b{display:block;font:600 26px/1.15 var(--font-num);font-variant-numeric:tabular-nums}
+.tile b.good{color:var(--road-l)}
+.tile b.bad{color:var(--danger)}
+.chart{margin:16px 0 0}
+.chart canvas{width:100%;height:160px;display:block}
+.chart figcaption{display:flex;gap:6px 14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:6px}
+.lg{display:inline-flex;align-items:center;gap:6px}
+.lg::before{content:"";width:16px;height:8px;border-radius:2px;background:var(--accent);opacity:.5}
+.lg.dash::before{height:0;border-top:2px dashed var(--muted);background:none;opacity:1}
+.log-wrap{overflow-x:auto}
+table.log{width:100%;border-collapse:collapse;font-size:13.5px;font-variant-numeric:tabular-nums}
+.log th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;text-align:left;padding:6px}
+.log td{border-top:1px solid var(--line);padding:7px 6px;white-space:nowrap}
+.log .r{text-align:right}
+.log tfoot td{font-weight:700;border-top:2px solid var(--line)}
+.cell-road{display:flex;gap:6px;align-items:center;max-width:max(130px, 34vw)}
+.cell-road span:last-child{overflow:hidden;text-overflow:ellipsis}
+
+.fatal{position:fixed;inset:0;z-index:2000;display:grid;place-items:center;padding:24px;background:var(--bg);text-align:center;font-size:16px}
+
+@media (min-width:900px){
+  body{grid-template-columns:420px minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+  .sheet{grid-column:1;grid-row:1;height:auto;border-top:0;border-right:1px solid var(--line);box-shadow:none;padding-top:10px}
+  .map-wrap{grid-column:2;grid-row:1}
+  .grab{display:none}
+  body.sheet-min .sheet{height:auto}
+  body.sheet-min .tabs{display:flex}
+  body.sheet-min .scroll{display:block}
+}
+@media (prefers-reduced-motion: reduce){ .car-rot{transition:none} }
+</style>
+</head>
+<body>
+
+<div class="map-wrap" id="mapWrap">
+  <div id="map" aria-label="Karte mit Route"></div>
+
+  <div class="hud" id="hud" aria-live="off">
+    <div class="gauge"><span class="gauge-v" id="hudSpeed">0</span><span class="gauge-u">km/h</span></div>
+    <span class="sign" id="hudSign" title="Eingestelltes Tempo in diesem Abschnitt">–</span>
+    <div class="hud-road" id="hudRoad"><span>Route wird geladen …</span></div>
+    <div class="hud-next" id="hudNext"></div>
+  </div>
+
+  <div class="map-btns">
+    <button type="button" class="map-btn" id="btnFollow" aria-pressed="true" aria-label="Karte folgt dem Fahrzeug" title="Karte folgt dem Fahrzeug">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    </button>
+    <button type="button" class="map-btn" id="btnFit" aria-label="Ganze Route zeigen" title="Ganze Route zeigen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+    </button>
+  </div>
+
+  <div class="gps" id="gps" title="Simulierter Standort"></div>
+  <div class="banner" id="splitBanner" hidden>
+    <span>Tippe auf die Route, wo ein neuer Abschnitt beginnen soll.</span>
+    <button type="button" class="btn small" id="btnSplitDone">Fertig</button>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+</div>
+
+<section class="sheet" id="sheet" aria-label="Steuerung">
+  <button type="button" class="grab" id="btnSheet" aria-label="Bedienfeld ein- oder ausklappen" aria-expanded="true"></button>
+
+  <div class="player pad-x">
+    <button type="button" class="play" id="btnPlay" aria-label="Fahrt starten"></button>
+    <div class="prog">
+      <div class="prog-top"><span><b id="pKm">0,0</b> km</span><span id="pRest">–</span></div>
+      <input type="range" id="scrub" min="0" max="1000" value="0" step="1" aria-label="Position auf der Strecke">
+    </div>
+    <button type="button" class="icon-btn" id="btnReset" aria-label="Zurück zum Start" title="Zurück zum Start">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4.5h4.5"/></svg>
+    </button>
+  </div>
+  <div class="stats pad-x">
+    <span>Fahrzeit <b id="pTime">0:00</b></span>
+    <span>Uhrzeit <b id="pClock">–</b></span>
+    <span>Ankunft <b id="pEta">–</b></span>
+  </div>
+  <div class="mults pad-x" id="mults" role="group" aria-label="Zeitraffer"><span class="lbl">Zeitraffer</span></div>
+
+  <div class="tabs pad-x" role="tablist">
+    <button type="button" role="tab" class="tab" id="tab-route" data-tab="route" aria-controls="panel-route" aria-selected="true">Route</button>
+    <button type="button" role="tab" class="tab" id="tab-secs" data-tab="secs" aria-controls="panel-secs" aria-selected="false">Abschnitte</button>
+    <button type="button" role="tab" class="tab" id="tab-stats" data-tab="stats" aria-controls="panel-stats" aria-selected="false">Auswertung</button>
+  </div>
+
+  <div class="scroll pad-x" id="scroll">
+    <div id="panel-route" role="tabpanel" aria-labelledby="tab-route">
+      <form class="form" id="routeForm" autocomplete="off">
+        <div class="field">
+          <label for="inFrom">Start</label>
+          <div class="inwrap">
+            <input id="inFrom" placeholder="Ort oder Adresse" enterkeyhint="next">
+            <button type="button" class="icon-btn" id="btnLocate" aria-label="Meinen Standort als Start nehmen" title="Mein Standort">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 11 21 3l-8 18-2-8z"/></svg>
+            </button>
+          </div>
+          <ul class="suggest" role="listbox" hidden></ul>
+        </div>
+        <div class="field">
+          <label for="inVia">Über <span class="opt">(optional)</span></label>
+          <div class="inwrap"><input id="inVia" placeholder="z. B. Hainichen" enterkeyhint="next"></div>
+          <ul class="suggest" role="listbox" hidden></ul>
+        </div>
+        <div class="field">
+          <label for="inTo">Ziel</label>
+          <div class="inwrap">
+            <input id="inTo" placeholder="Ort oder Adresse" enterkeyhint="go">
+            <button type="button" class="icon-btn" id="btnSwap" aria-label="Start und Ziel tauschen" title="Tauschen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3"/></svg>
+            </button>
+          </div>
+          <ul class="suggest" role="listbox" hidden></ul>
+        </div>
+        <button type="submit" class="btn primary" id="btnCalc">Route berechnen</button>
+        <p class="msg" id="routeMsg" role="status"></p>
+      </form>
+      <div class="alts" id="alts"></div>
+
+      <h3 class="h">Beispiele</h3>
+      <div class="row" id="examples"></div>
+
+      <h3 class="h">Fahrweise</h3>
+      <div class="seg" id="styleSeg" role="group" aria-label="Fahrstil">
+        <button type="button" data-style="calm">Gemütlich</button>
+        <button type="button" data-style="normal">Normal</button>
+        <button type="button" data-style="sporty">Sportlich</button>
+      </div>
+      <label class="check"><input type="checkbox" id="chkTurns" checked> Vor Abbiegungen und Kreisverkehren abbremsen</label>
+      <div class="field">
+        <label for="dep">Abfahrt</label>
+        <div class="inwrap"><input type="time" id="dep"></div>
+      </div>
+      <p class="note">Die Position wird nur in dieser App simuliert. Karte © OpenStreetMap-Mitwirkende (openstreetmap.de), Routen von OSRM. Richtwerte sind aus dem Straßentyp geschätzt und keine echten Tempolimits.</p>
+    </div>
+
+    <div id="panel-secs" role="tabpanel" aria-labelledby="tab-secs" hidden>
+      <p class="note top">Stell für jeden Abschnitt ein, wie schnell du dort gefahren bist. Lange Abschnitte kannst du teilen, zum Beispiel für eine Baustelle.</p>
+      <div class="tools">
+        <button type="button" class="btn small" id="btnSplitMode" aria-pressed="false">Auf Karte teilen</button>
+        <button type="button" class="btn small" id="btnResetSpeeds">Alle auf Richtwert</button>
+      </div>
+      <div class="quick" id="quickA" hidden><span class="lbl">Alle Autobahn-Abschnitte</span></div>
+      <div class="secs" id="secList"></div>
+    </div>
+
+    <div id="panel-stats" role="tabpanel" aria-labelledby="tab-stats" hidden>
+      <div class="tiles">
+        <div class="tile"><span>Fahrzeit</span><b id="tTime">–</b></div>
+        <div class="tile"><span>Ø-Tempo</span><b id="tAvg">–</b></div>
+        <div class="tile"><span>Ankunft</span><b id="tEta">–</b></div>
+        <div class="tile"><span>Ggü. Richtwerten</span><b id="tDiff">–</b></div>
+      </div>
+      <figure class="chart">
+        <canvas id="chart" role="img" aria-label="Tempo entlang der Strecke"></canvas>
+        <figcaption><span class="lg">Gefahrenes Tempo</span><span class="lg dash">Eingestelltes Tempo</span><span>km/h über Strecken-km</span></figcaption>
+      </figure>
+      <h3 class="h">Fahrtverlauf</h3>
+      <div class="log-wrap">
+        <table class="log">
+          <thead><tr><th>Abschnitt</th><th class="r">km</th><th class="r">km/h</th><th class="r">Dauer</th><th class="r">ab</th></tr></thead>
+          <tbody id="logBody"></tbody>
+          <tfoot id="logFoot"></tfoot>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+(function () {
+'use strict';
+
+if (!window.L) {
+  document.body.insertAdjacentHTML('beforeend', '<div class="fatal">Die Karte konnte nicht geladen werden.<br>Bitte Internetverbindung prüfen und die Seite neu laden.</div>');
+  return;
+}
+
+/* ---------- Grundlagen ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const pad = n => String(n).padStart(2, '0');
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+const ROUTERS = ['https://router.project-osrm.org', 'https://routing.openstreetmap.de/routed-car'];
+const STYLES = { calm: { acc: 1.2, dec: 1.6 }, normal: { acc: 2.0, dec: 2.6 }, sporty: { acc: 3.2, dec: 4.2 } };
+const MULTS = [1, 2, 5, 10, 30, 60];
+const QUICK_A = [100, 130, 160, 200, 250, 300];
+const EXAMPLES = [
+  { from: 'Nossen', to: 'Chemnitz' },
+  { from: 'Dresden', to: 'Leipzig' },
+  { from: 'Chemnitz', to: 'Zwickau' },
+  { from: 'Freiberg', via: 'Nossen', to: 'Meißen' }
+];
+const MIN_SECTION = 400;  // m, kürzere Straßenstücke werden zusammengefasst
+const SPLIT_GAP = 150;    // m Mindestabstand zu einer Abschnittsgrenze
+const V_MIN = 10, V_MAX = 300;
+
+const nf1 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const nf0 = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 });
+const nf5 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 5, maximumFractionDigits: 5 });
+const km = m => nf1.format(Math.max(0, m) / 1000);
+function hms(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+function words(sec) {
+  sec = Math.abs(sec);
+  if (sec < 90) return `${Math.round(sec)} s`;
+  const m = Math.round(sec / 60);
+  return m < 60 ? `${m} Min` : `${Math.floor(m / 60)} Std ${m % 60} Min`;
+}
+function clock(ms) { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+const STORE_KEY = 'fahrsimulator.v1';
+function loadStore() { try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { return {}; } }
+function saveStore(patch) { try { localStorage.setItem(STORE_KEY, JSON.stringify(Object.assign(loadStore(), patch))); } catch (e) { /* Speicher nicht verfügbar */ } }
+
+/* ---------- Geometrie ---------- */
+const RAD = Math.PI / 180;
+function hav(a, b) {
+  const dLat = (b[0] - a[0]) * RAD, dLng = (b[1] - a[1]) * RAD;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * RAD) * Math.cos(b[0] * RAD) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+function bearing(a, b) {
+  const f1 = a[0] * RAD, f2 = b[0] * RAD, dl = (b[1] - a[1]) * RAD;
+  const y = Math.sin(dl) * Math.cos(f2);
+  const x = Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl);
+  return (Math.atan2(y, x) / RAD + 360) % 360;
+}
+
+/* ---------- Netz: Orte und Routen ---------- */
+async function fetchJSON(url, ms = 15000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: ctl.signal });
+    const data = await res.json().catch(() => null);
+    if (!data) throw new Error(`HTTP ${res.status}`);
+    return data;
+  } finally { clearTimeout(timer); }
+}
+
+async function photon(q, limit, bias) {
+  let url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=${limit + 3}&lang=de`;
+  if (bias) url += `&lat=${bias.lat.toFixed(3)}&lon=${bias.lng.toFixed(3)}`;
+  const d = await fetchJSON(url, 10000);
+  let items = (d.features || []).map(f => {
+    const p = f.properties || {};
+    const name = p.name || [p.street, p.housenumber].filter(Boolean).join(' ');
+    const city = p.city && p.city !== name ? p.city : '';
+    const sub = [city, p.state, p.countrycode && p.countrycode !== 'DE' ? p.country : ''].filter(Boolean).join(', ');
+    return { lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], name, city, sub, key: p.osm_key };
+  }).filter(it => it.name);
+  // Gemeindegrenzen liegen oft weit vom Ortskern; dann lieber den Ort selbst nehmen
+  items = items.filter(it => !(it.key === 'boundary' && items.some(o => o !== it && o.key === 'place' && o.name === it.name)));
+  const seen = new Set();
+  items = items.filter(it => { const k = it.name + '|' + it.sub; if (seen.has(k)) return false; seen.add(k); return true; });
+  return items.slice(0, limit).map(it => Object.assign(it, { label: it.city ? `${it.name}, ${it.city}` : it.name }));
+}
+
+async function geocode(q, bias) {
+  const m = q.match(/^\s*(-?\d{1,2}(?:[.]\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:[.]\d+)?)\s*$/);
+  if (m) return { lat: +m[1], lng: +m[2], label: q.trim() };
+  let netErr = false;
+  try { const r = await photon(q, 1, bias); if (r.length) return r[0]; } catch (e) { netErr = true; }
+  try {
+    const n = await fetchJSON(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=de&q=${encodeURIComponent(q)}`, 12000);
+    if (Array.isArray(n) && n.length) return { lat: +n[0].lat, lng: +n[0].lon, label: n[0].name || q.trim() };
+  } catch (e) { netErr = true; }
+  throw new Error(netErr ? `„${q}“ konnte nicht gesucht werden. Bitte Internetverbindung prüfen.` : `„${q}“ wurde nicht gefunden.`);
+}
+
+async function fetchRoutes(pts) {
+  const coordStr = pts.map(p => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
+  const qs = `overview=false&steps=true&geometries=geojson&alternatives=${pts.length === 2 ? 3 : 'false'}`;
+  let lastErr = null;
+  for (const base of ROUTERS) {
+    try {
+      const d = await fetchJSON(`${base}/route/v1/driving/${coordStr}?${qs}`, 20000);
+      if (d.code === 'Ok' && d.routes && d.routes.length) return d.routes;
+      lastErr = new Error(d.code === 'NoRoute' ? 'Zwischen diesen Orten gibt es keine Straßenverbindung.' : 'Der Routendienst hat keine Route geliefert.');
+      if (d.code === 'NoRoute') break;
+    } catch (e) {
+      lastErr = new Error('Der Routendienst ist gerade nicht erreichbar. Bitte Internetverbindung prüfen.');
+    }
+  }
+  throw lastErr;
+}
+
+/* ---------- Route und Abschnitte ---------- */
+function buildRoute(r) {
+  const coords = [], steps = [];
+  for (const leg of r.legs) for (const st of leg.steps) {
+    const g = (st.geometry && st.geometry.coordinates) || [];
+    const idx = coords.length ? coords.length - 1 : 0;
+    for (const c of g) {
+      const p = [c[1], c[0]], last = coords[coords.length - 1];
+      if (last && Math.abs(last[0] - p[0]) < 1e-7 && Math.abs(last[1] - p[1]) < 1e-7) continue;
+      coords.push(p);
+    }
+    steps.push({ idx, name: st.name || '', ref: st.ref || '', dest: st.destinations || '', type: st.maneuver.type, mod: st.maneuver.modifier || '', dist: st.distance, dur: st.duration });
+  }
+  const cum = new Float64Array(coords.length);
+  for (let i = 1; i < coords.length; i++) cum[i] = cum[i - 1] + hav(coords[i - 1], coords[i]);
+  const total = coords.length ? cum[coords.length - 1] : 0;
+  for (const s of steps) s.s = cum[Math.min(s.idx, coords.length - 1)] || 0;
+  const summary = r.legs.map(l => l.summary).filter(Boolean).join(' · ');
+  return { coords, cum, total, steps, summary, osrmDur: r.duration };
+}
+
+function classify(ref) {
+  const r = (ref || '').split(/[;,]/)[0].trim();
+  if (!r) return { cls: 'O', ref: '' };
+  if (/^A\s?\d/i.test(r)) return { cls: 'A', ref: r };
+  if (/^B\s?\d/i.test(r)) return { cls: 'B', ref: r };
+  if (/^K\s?\d/i.test(r)) return { cls: 'K', ref: r };
+  return { cls: 'L', ref: r };
+}
+
+function defaultSpeed(g) {
+  // Richtwert aus Straßentyp und OSRM-Durchschnittstempo; echte Tempolimits liefert der Dienst nicht
+  const avg = g.dur > 0 ? g.dist / g.dur * 3.6 : 50;
+  if (g.cls === 'A') return avg >= 85 ? 130 : 100;
+  if (avg >= 62) return 100;
+  if (avg >= 48) return 70;
+  if (avg >= 18) return 50;
+  return 30;
+}
+
+function mergeGroups(gs, i, j) {
+  const a = gs[i], b = gs[j];
+  b.start = Math.min(a.start, b.start); b.end = Math.max(a.end, b.end);
+  b.dist += a.dist; b.dur += a.dur;
+  for (const n in a.names) b.names[n] = (b.names[n] || 0) + a.names[n];
+  if (!b.dest) b.dest = a.dest;
+  gs.splice(i, 1);
+}
+function coalesce(gs) { for (let i = gs.length - 1; i > 0; i--) if (gs[i].key === gs[i - 1].key) mergeGroups(gs, i, i - 1); }
+
+function buildSections(route) {
+  const gs = [];
+  for (const st of route.steps) {
+    if (st.dist < 0.5) continue;
+    const c = classify(st.ref);
+    const ramp = !st.name && !st.ref;
+    const key = ramp ? '~ramp' : (c.ref || '~ort');
+    let g = gs[gs.length - 1];
+    if (!g || g.key !== key || ramp) {
+      g = { key, cls: ramp ? 'R' : c.cls, ref: c.ref, start: st.s, end: 0, dist: 0, dur: 0, names: {}, dest: '' };
+      gs.push(g);
+    }
+    g.dist += st.dist; g.dur += st.dur;
+    if (st.name) g.names[st.name] = (g.names[st.name] || 0) + st.dist;
+    if (st.dest && !g.dest) g.dest = st.dest;
+  }
+  if (!gs.length) gs.push({ key: '~ort', cls: 'O', ref: '', start: 0, end: 0, dist: route.total, dur: route.osrmDur, names: {}, dest: '' });
+  gs.forEach((g, i) => { g.end = i < gs.length - 1 ? gs[i + 1].start : route.total; });
+  gs[0].start = 0;
+
+  // Auf- und Abfahrten gehören zur Straße, auf die sie führen
+  let i;
+  while ((i = gs.findIndex(g => g.cls === 'R')) !== -1 && gs.length > 1) mergeGroups(gs, i, i < gs.length - 1 ? i + 1 : i - 1);
+  gs.forEach(g => { if (g.cls === 'R') { g.cls = 'O'; g.key = '~ort'; } });
+  coalesce(gs);
+
+  // Sehr kurze Stücke in den Nachbarn aufnehmen
+  while (gs.length > 1) {
+    let mi = -1, ml = Infinity;
+    gs.forEach((g, k) => { const l = g.end - g.start; if (l < MIN_SECTION && l < ml) { ml = l; mi = k; } });
+    if (mi < 0) break;
+    const prev = gs[mi - 1], next = gs[mi + 1];
+    let tgt = prev ? mi - 1 : mi + 1;
+    if (prev && next && next.cls === gs[mi].cls && prev.cls !== gs[mi].cls) tgt = mi + 1;
+    mergeGroups(gs, mi, tgt);
+    coalesce(gs);
+  }
+
+  const shortDest = d => (d.split(':').pop() || '').split(',')[0].trim();
+  return gs.map((g, k) => {
+    const names = Object.entries(g.names).sort((a, b) => b[1] - a[1]);
+    let name = names.length ? names[0][0] : '';
+    if (g.cls === 'O' && names.length > 1) name += ' u. a.';
+    const next = gs[k + 1];
+    const def = defaultSpeed(g);
+    return {
+      start: g.start, end: g.end, cls: g.cls, ref: g.ref, name,
+      dest: shortDest(g.dest), exit: g.cls === 'A' && next ? shortDest(next.dest) : '',
+      def, speed: def, gid: k
+    };
+  });
+}
+
+function turnCap(st) {
+  const t = st.type, m = st.mod;
+  if (t === 'depart' || t === 'arrive' || t === 'on ramp' || t === 'off ramp' || t === 'merge') return null;
+  if (/roundabout|rotary/.test(t)) return 30;
+  if (m === 'uturn') return 15;
+  if (m === 'sharp left' || m === 'sharp right') return 20;
+  if (m === 'left' || m === 'right') return 25;
+  if ((m === 'slight left' || m === 'slight right') && t !== 'fork') return 60;
+  return null;
+}
+
+/* ---------- Fahrprofil: Tempo und Zeit entlang der Strecke ---------- */
+function buildProfile(route, sections, style, turns, field) {
+  const L = route.total;
+  const ds = clamp(L / 8000, 5, 25);
+  const n = Math.max(2, Math.ceil(L / ds) + 1);
+  const S = new Float64Array(n), V = new Float64Array(n), T = new Float64Array(n);
+  let si = 0;
+  for (let k = 0; k < n; k++) {
+    const s = Math.min(k * ds, L);
+    S[k] = s;
+    while (si < sections.length - 1 && s >= sections[si].end) si++;
+    V[k] = sections[si][field] / 3.6;
+  }
+  if (turns) for (const st of route.steps) {
+    const cap = turnCap(st);
+    if (cap == null) continue;
+    const k = Math.round(st.s / ds);
+    if (k > 0 && k < n - 1) V[k] = Math.min(V[k], cap / 3.6);
+  }
+  V[0] = 0; V[n - 1] = 0;
+  for (let k = 1; k < n; k++) V[k] = Math.min(V[k], Math.sqrt(V[k - 1] ** 2 + 2 * style.acc * (S[k] - S[k - 1])));
+  for (let k = n - 2; k >= 0; k--) V[k] = Math.min(V[k], Math.sqrt(V[k + 1] ** 2 + 2 * style.dec * (S[k + 1] - S[k])));
+  for (let k = 1; k < n; k++) T[k] = T[k - 1] + 2 * (S[k] - S[k - 1]) / Math.max(0.2, V[k - 1] + V[k]);
+  return { S, V, T, n, ds, total: T[n - 1] };
+}
+function atTime(P, t) {
+  if (t <= 0) return { s: 0, v: 0 };
+  if (t >= P.total) return { s: P.S[P.n - 1], v: 0 };
+  let lo = 0, hi = P.n - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (P.T[mid] <= t) lo = mid; else hi = mid; }
+  const f = (t - P.T[lo]) / ((P.T[hi] - P.T[lo]) || 1);
+  return { s: P.S[lo] + (P.S[hi] - P.S[lo]) * f, v: P.V[lo] + (P.V[hi] - P.V[lo]) * f };
+}
+function timeAt(P, s) {
+  if (s <= 0) return 0;
+  if (s >= P.S[P.n - 1]) return P.total;
+  let k = Math.min(P.n - 2, Math.floor(s / P.ds));
+  while (k > 0 && P.S[k] > s) k--;
+  while (k < P.n - 2 && P.S[k + 1] < s) k++;
+  const f = (s - P.S[k]) / ((P.S[k + 1] - P.S[k]) || 1);
+  return P.T[k] + (P.T[k + 1] - P.T[k]) * clamp(f, 0, 1);
+}
+
+/* ---------- Zustand ---------- */
+const saved = loadStore();
+const settings = Object.assign({ style: 'normal', turns: true, mult: 1 }, saved.settings || {});
+if (!STYLES[settings.style]) settings.style = 'normal';
+if (!MULTS.includes(settings.mult)) settings.mult = 1;
+
+const state = { routes: [], altIdx: 0, route: null, sections: [], P: null, Pdef: null, sel: -1, splitMode: false, sig: '', toLabel: '', viaPoint: null };
+const sim = { t: 0, s: 0, playing: false, last: 0, follow: true };
+let activeTab = 'route', scrubbing = false, lastSecIdx = -1, lastHeavy = 0, curAngle = 0, routeToken = 0;
+
+const ui = {
+  hudSpeed: $('#hudSpeed'), hudSign: $('#hudSign'), hudRoad: $('#hudRoad'), hudNext: $('#hudNext'), gps: $('#gps'),
+  play: $('#btnPlay'), scrub: $('#scrub'), pKm: $('#pKm'), pRest: $('#pRest'), pTime: $('#pTime'), pClock: $('#pClock'), pEta: $('#pEta'),
+  inFrom: $('#inFrom'), inVia: $('#inVia'), inTo: $('#inTo'), msg: $('#routeMsg'), dep: $('#dep'), secList: $('#secList')
+};
+
+/* ---------- Karte ---------- */
+const map = L.map('map', { zoomControl: false }).setView([50.95, 13.1], 9);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+map.attributionControl.setPrefix('<a href="https://leafletjs.com">Leaflet</a>');
+const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende · Route: <a href="https://project-osrm.org/">OSRM</a>';
+// openstreetmap.de liefert auch ohne Referer (Datei direkt auf dem Handy geöffnet); tile.openstreetmap.org nur als Ersatz
+const TILE_URLS = ['https://tile.openstreetmap.de/{z}/{x}/{y}.png', 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
+let tileIdx = 0, tileErrors = 0;
+const tileLayer = L.tileLayer(TILE_URLS[0], { maxZoom: 19, attribution: ATTR, className: 'base-tiles' }).addTo(map);
+tileLayer.on('tileerror', () => {
+  if (++tileErrors >= 6 && tileIdx < TILE_URLS.length - 1) { tileErrors = 0; tileLayer.setUrl(TILE_URLS[++tileIdx]); }
+});
+const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  if (state.route) drawRoute();
+  drawChart();
+}
+if (darkMq.addEventListener) darkMq.addEventListener('change', applyTheme); else if (darkMq.addListener) darkMq.addListener(applyTheme);
+applyTheme();
+
+const routeLayer = L.layerGroup().addTo(map);
+let selLine = null, drivenLine = null;
+const carIcon = L.divIcon({
+  className: 'car', iconSize: [44, 44], iconAnchor: [22, 22],
+  html: '<div class="car-rot"><svg viewBox="0 0 44 44" aria-hidden="true"><circle class="car-halo" cx="22" cy="22" r="21"/><path class="car-arrow" d="M22 6 32.5 34 22 28.2 11.5 34Z"/></svg></div>'
+});
+const car = L.marker([50.95, 13.1], { icon: carIcon, interactive: false, keyboard: false, zIndexOffset: 1000 });
+const pinIcon = (txt, cls) => L.divIcon({ className: '', iconSize: [26, 26], iconAnchor: [13, 13], html: `<div class="pin ${cls}">${txt}</div>` });
+const roadColor = cls => cssVar({ A: '--road-a', B: '--road-b', L: '--road-l', K: '--road-l' }[cls] || '--road-o');
+
+function pointAt(s) {
+  const r = state.route, c = r.cum, n = c.length;
+  if (s <= 0) return r.coords[0];
+  if (s >= r.total) return r.coords[n - 1];
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (c[m] <= s) lo = m; else hi = m; }
+  const f = (s - c[lo]) / ((c[hi] - c[lo]) || 1), A = r.coords[lo], B = r.coords[hi];
+  return [A[0] + (B[0] - A[0]) * f, A[1] + (B[1] - A[1]) * f];
+}
+function sliceCoords(a, b) {
+  const r = state.route, c = r.cum, out = [pointAt(a)];
+  let lo = 0, hi = c.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (c[m] <= a) lo = m + 1; else hi = m; }
+  for (let i = lo; i < c.length && c[i] < b; i++) out.push(r.coords[i]);
+  out.push(pointAt(b));
+  return out;
+}
+function nearestOnRoute(latlng) {
+  const r = state.route, P = map.latLngToLayerPoint(latlng);
+  const pts = r.coords.map(c => map.latLngToLayerPoint(c));
+  let best = { d: Infinity, s: 0 };
+  for (let i = 0; i < pts.length - 1; i++) {
+    const A = pts[i], B = pts[i + 1], dx = B.x - A.x, dy = B.y - A.y, len2 = dx * dx + dy * dy;
+    const t = len2 ? clamp(((P.x - A.x) * dx + (P.y - A.y) * dy) / len2, 0, 1) : 0;
+    const d = Math.hypot(P.x - (A.x + t * dx), P.y - (A.y + t * dy));
+    if (d < best.d) best = { d, s: r.cum[i] + t * (r.cum[i + 1] - r.cum[i]) };
+  }
+  return best;
+}
+
+function drawRoute() {
+  const r = state.route;
+  routeLayer.clearLayers();
+  const casing = cssVar('--casing');
+  L.polyline(r.coords, { color: casing, weight: 11, opacity: .95, interactive: false, lineJoin: 'round' }).addTo(routeLayer);
+  selLine = L.polyline([], { color: cssVar('--accent'), weight: 18, opacity: .3, interactive: false, lineJoin: 'round' }).addTo(routeLayer);
+  for (const sec of state.sections) L.polyline(sliceCoords(sec.start, sec.end), { color: roadColor(sec.cls), weight: 6, opacity: 1, interactive: false, lineJoin: 'round' }).addTo(routeLayer);
+  drivenLine = L.polyline([], { color: cssVar('--driven'), weight: 6, opacity: .95, interactive: false, lineJoin: 'round' }).addTo(routeLayer);
+  const fg = cssVar('--fg');
+  state.sections.slice(1).forEach(sec => L.circleMarker(pointAt(sec.start), { radius: 4.5, color: fg, weight: 2, fillColor: casing, fillOpacity: 1, interactive: false }).addTo(routeLayer));
+  L.marker(r.coords[0], { icon: pinIcon('S', ''), interactive: false, keyboard: false }).addTo(routeLayer);
+  if (state.viaPoint) L.marker(state.viaPoint, { icon: pinIcon('Ü', ''), interactive: false, keyboard: false }).addTo(routeLayer);
+  L.marker(r.coords[r.coords.length - 1], { icon: pinIcon('Z', 'end'), interactive: false, keyboard: false }).addTo(routeLayer);
+  if (!map.hasLayer(car)) car.addTo(map);
+  updateSelLine();
+  updateDriven();
+}
+function updateSelLine() {
+  if (!selLine) return;
+  const sec = state.sections[state.sel];
+  selLine.setLatLngs(sec ? sliceCoords(sec.start, sec.end) : []);
+}
+function updateDriven() { if (drivenLine && state.route) drivenLine.setLatLngs(sim.s > 1 ? sliceCoords(0, sim.s) : []); }
+function fitRoute() {
+  if (!state.route) return;
+  const wide = window.innerWidth >= 900;
+  map.fitBounds(L.latLngBounds(state.route.coords), { paddingTopLeft: [wide ? 40 : 20, wide ? 40 : 140], paddingBottomRight: [64, 30] });
+}
+function setFollow(on) {
+  sim.follow = on;
+  $('#btnFollow').setAttribute('aria-pressed', String(on));
+  if (on && state.route) map.setView(pointAt(sim.s), Math.max(map.getZoom(), 15), { animate: false });
+}
+
+/* ---------- Darstellung ---------- */
+function secTitle(sec) {
+  if (sec.cls === 'A') return sec.dest ? `Richtung ${sec.dest}` : (sec.exit ? `bis Ausfahrt ${sec.exit}` : 'Autobahn');
+  if (sec.cls === 'O') return sec.name || 'Ortsstraßen';
+  return sec.name || sec.dest || { B: 'Bundesstraße', L: 'Landstraße', K: 'Kreisstraße' }[sec.cls];
+}
+function badge(sec, sm) { return `<span class="badge badge-${sec.cls}${sm ? ' sm' : ''}">${esc(sec.ref || 'Ort')}</span>`; }
+function sectionIndexAt(s) {
+  const secs = state.sections;
+  for (let i = 0; i < secs.length; i++) if (s < secs[i].end) return i;
+  return secs.length - 1;
+}
+function depTime() {
+  const [h, m] = (ui.dep.value || '').split(':').map(Number);
+  const d = new Date();
+  if (Number.isFinite(h)) d.setHours(h, Number.isFinite(m) ? m : 0, 0, 0);
+  return d.getTime();
+}
+function secDur(i) { const sec = state.sections[i]; return timeAt(state.P, sec.end) - timeAt(state.P, sec.start); }
+
+function updateHudSection(i) {
+  const sec = state.sections[i];
+  if (!sec) return;
+  ui.hudRoad.innerHTML = `${badge(sec)}<span>${esc(secTitle(sec))}</span>`;
+  ui.hudSign.textContent = sec.speed;
+  $$('.sec.is-current', ui.secList).forEach(el => el.classList.remove('is-current'));
+  const card = ui.secList.querySelector(`.sec[data-i="${i}"]`);
+  if (card) card.classList.add('is-current');
+}
+function updateHudNext(i, s) {
+  const r = state.route, nx = state.sections[i + 1];
+  if (s >= r.total - 1) ui.hudNext.textContent = `Angekommen in ${state.toLabel}`;
+  else if (nx) ui.hudNext.innerHTML = `In ${km(nx.start - s)} km ${badge(nx, true)} ${nx.speed} km/h`;
+  else ui.hudNext.textContent = `Ziel in ${km(r.total - s)} km`;
+}
+
+function render(opts) {
+  opts = opts || {};
+  const P = state.P, r = state.route;
+  if (!P || !r) return;
+  const at = atTime(P, sim.t);
+  sim.s = at.s;
+  const pos = pointAt(at.s);
+  car.setLatLng(pos);
+  if (at.s < r.total - 1) {
+    const b = bearing(pointAt(Math.max(0, at.s - 8)), pointAt(Math.min(r.total, at.s + 20)));
+    const d = ((b - curAngle + 540) % 360) - 180;
+    if (Math.abs(d) > 0.5) {
+      curAngle += d;
+      const el = car.getElement();
+      if (el) el.firstChild.style.transform = `rotate(${curAngle}deg)`;
+    }
+  }
+  if (opts.pan) map.panTo(pos, { animate: false });
+
+  ui.hudSpeed.textContent = Math.round(at.v * 3.6);
+  const si = sectionIndexAt(at.s);
+  if (si !== lastSecIdx) { lastSecIdx = si; updateHudSection(si); }
+  ui.pKm.textContent = km(at.s);
+  if (!scrubbing) ui.scrub.value = Math.round(at.s / r.total * 1000);
+  ui.pTime.textContent = hms(sim.t);
+  ui.pClock.textContent = clock(depTime() + sim.t * 1000);
+
+  const now = performance.now();
+  if (opts.force || now - lastHeavy > 200) {
+    lastHeavy = now;
+    ui.pRest.textContent = `noch ${km(r.total - at.s)} km`;
+    ui.gps.textContent = `${nf5.format(pos[0])}° N · ${nf5.format(pos[1])}° O`;
+    updateHudNext(si, at.s);
+    updateDriven();
+    drawChart();
+  }
+}
+
+/* ---------- Simulation ---------- */
+const ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>';
+const ICON_PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.6v14H7zM13.4 5H17v14h-3.6z" fill="currentColor"/></svg>';
+function setPlayIcon() {
+  ui.play.innerHTML = sim.playing ? ICON_PAUSE : ICON_PLAY;
+  ui.play.setAttribute('aria-label', sim.playing ? 'Fahrt anhalten' : 'Fahrt starten');
+}
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && !wakeLock && 'wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch (e) { wakeLock = null; }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && sim.playing) keepAwake(true); });
+
+function play() {
+  if (!state.P) return;
+  if (sim.t >= state.P.total) sim.t = 0;
+  sim.playing = true;
+  sim.last = performance.now();
+  if (sim.follow) map.setView(pointAt(sim.s), Math.max(map.getZoom(), 15), { animate: false });
+  setPlayIcon();
+  keepAwake(true);
+  requestAnimationFrame(frame);
+}
+function pause() { sim.playing = false; setPlayIcon(); keepAwake(false); }
+function frame(now) {
+  if (!sim.playing) return;
+  const dt = Math.max(0, (now - sim.last) / 1000);
+  sim.last = now;
+  sim.t = Math.min(state.P.total, sim.t + dt * settings.mult);
+  render({ pan: sim.follow });
+  if (sim.t >= state.P.total) {
+    pause();
+    render({ force: true });
+    toast(`Angekommen in ${state.toLabel} nach ${words(state.P.total)}`);
+  } else requestAnimationFrame(frame);
+}
+
+function recompute() {
+  const keepS = state.P ? atTime(state.P, sim.t).s : 0;
+  const st = STYLES[settings.style];
+  state.P = buildProfile(state.route, state.sections, st, settings.turns, 'speed');
+  state.Pdef = buildProfile(state.route, state.sections, st, settings.turns, 'def');
+  sim.t = keepS > 0 ? timeAt(state.P, keepS) : 0;
+}
+
+/* ---------- Abschnittsliste ---------- */
+function renderSections() {
+  const secs = state.sections;
+  ui.secList.innerHTML = secs.map((sec, i) => {
+    const len = sec.end - sec.start;
+    const canJoin = i < secs.length - 1 && secs[i + 1].gid === sec.gid;
+    return `<article class="sec${i === state.sel ? ' is-sel' : ''}${i === lastSecIdx ? ' is-current' : ''}" data-i="${i}">
+      <button type="button" class="sec-head" data-act="focus" aria-label="Abschnitt auf der Karte zeigen">${badge(sec)}
+        <span class="sec-title"><b>${esc(secTitle(sec))}</b><small>km ${km(sec.start)} bis ${km(sec.end)} · ${km(len)} km</small></span>
+        <span class="sec-time"><span data-role="time">${hms(secDur(i))}</span><small>Fahrzeit</small></span>
+      </button>
+      <div class="sec-ctrl">
+        <button type="button" class="step" data-act="minus" aria-label="10 km/h langsamer">−</button>
+        <input type="range" min="${V_MIN}" max="${V_MAX}" step="5" value="${sec.speed}" data-act="range" aria-label="Tempo in km/h">
+        <button type="button" class="step" data-act="plus" aria-label="10 km/h schneller">+</button>
+        <span class="sign" data-role="sign">${sec.speed}</span>
+      </div>
+      <div class="sec-foot"><span class="sp">Richtwert ${sec.def} km/h</span>${len >= 2 * SPLIT_GAP ? '<button type="button" class="link-btn" data-act="split">Teilen</button>' : ''}${canJoin ? '<button type="button" class="link-btn" data-act="join">Verbinden</button>' : ''}</div>
+    </article>`;
+  }).join('');
+  const hasA = secs.some(s => s.cls === 'A');
+  $('#quickA').hidden = !hasA;
+}
+function updateSectionTimes() {
+  $$('.sec', ui.secList).forEach(card => {
+    const i = +card.dataset.i, el = card.querySelector('[data-role="time"]');
+    if (el && state.sections[i]) el.textContent = hms(secDur(i));
+  });
+}
+
+function updateSummary() {
+  const P = state.P, Pd = state.Pdef, r = state.route;
+  if (!P) return;
+  const dep = depTime();
+  ui.pEta.textContent = clock(dep + P.total * 1000);
+  $('#tTime').textContent = words(P.total);
+  $('#tAvg').textContent = `${nf0.format(r.total / P.total * 3.6)} km/h`;
+  $('#tEta').textContent = clock(dep + P.total * 1000);
+  const diff = Pd.total - P.total, el = $('#tDiff');
+  el.className = Math.abs(diff) < 30 ? '' : (diff > 0 ? 'good' : 'bad');
+  el.textContent = Math.abs(diff) < 30 ? 'gleich' : `${words(diff)} ${diff > 0 ? 'schneller' : 'langsamer'}`;
+  $('#logBody').innerHTML = state.sections.map((sec, i) => {
+    const t0 = timeAt(P, sec.start), t1 = timeAt(P, sec.end);
+    return `<tr><td><span class="cell-road">${badge(sec, true)}<span>${esc(secTitle(sec))}</span></span></td><td class="r">${km(sec.end - sec.start)}</td><td class="r">${sec.speed}</td><td class="r">${hms(t1 - t0)}</td><td class="r">${clock(dep + t0 * 1000)}</td></tr>`;
+  }).join('');
+  $('#logFoot').innerHTML = `<tr><td>Gesamt</td><td class="r">${km(r.total)}</td><td class="r">Ø ${nf0.format(r.total / P.total * 3.6)}</td><td class="r">${hms(P.total)}</td><td class="r">an ${clock(dep + P.total * 1000)}</td></tr>`;
+  updateSectionTimes();
+  drawChart();
+}
+
+let saveTimer = 0;
+function saveSections() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => saveStore({ secs: { sig: `${state.sig}#${state.altIdx}`, total: Math.round(state.route.total), list: state.sections } }), 400);
+}
+function sectionsChanged(rebuild) {
+  recompute();
+  if (rebuild) { lastSecIdx = -1; renderSections(); drawRoute(); }
+  updateSummary();
+  render({ force: true });
+  if (state.sections[lastSecIdx]) ui.hudSign.textContent = state.sections[lastSecIdx].speed;
+  saveSections();
+}
+function setSpeed(i, v, fromRange) {
+  const sec = state.sections[i];
+  if (!sec) return;
+  sec.speed = clamp(Math.round(v), V_MIN, V_MAX);
+  const card = ui.secList.querySelector(`.sec[data-i="${i}"]`);
+  if (card) {
+    card.querySelector('[data-role="sign"]').textContent = sec.speed;
+    if (!fromRange) card.querySelector('input[type=range]').value = sec.speed;
+  }
+  sectionsChanged(false);
+}
+function splitAt(s) {
+  const i = sectionIndexAt(s), sec = state.sections[i];
+  if (s - sec.start < SPLIT_GAP || sec.end - s < SPLIT_GAP) { toast('Zu nah an einer Abschnittsgrenze'); return; }
+  state.sections.splice(i + 1, 0, Object.assign({}, sec, { start: s }));
+  sec.end = s;
+  if (state.sel > i) state.sel++;
+  sectionsChanged(true);
+  toast(`Neuer Abschnitt ab km ${km(s)}`);
+}
+function joinNext(i) {
+  const a = state.sections[i], b = state.sections[i + 1];
+  if (!b || a.gid !== b.gid) return;
+  a.end = b.end;
+  state.sections.splice(i + 1, 1);
+  if (state.sel > i) state.sel--;
+  sectionsChanged(true);
+}
+function selectSection(i, fromMap) {
+  state.sel = i;
+  $$('.sec', ui.secList).forEach(el => el.classList.toggle('is-sel', +el.dataset.i === i));
+  updateSelLine();
+  const sec = state.sections[i];
+  if (!sec) return;
+  if (fromMap) {
+    switchTab('secs');
+    const card = ui.secList.querySelector(`.sec[data-i="${i}"]`);
+    if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  } else {
+    setFollow(false);
+    map.fitBounds(L.latLngBounds(sliceCoords(sec.start, sec.end)), { padding: [40, 40], paddingTopLeft: [40, window.innerWidth >= 900 ? 40 : 140], maxZoom: 16 });
+  }
+}
+
+ui.secList.addEventListener('click', e => {
+  const btn = e.target.closest('[data-act]');
+  if (!btn || btn.dataset.act === 'range') return;
+  const i = +btn.closest('.sec').dataset.i, sec = state.sections[i];
+  switch (btn.dataset.act) {
+    case 'focus': selectSection(i, false); break;
+    case 'minus': setSpeed(i, sec.speed - 10); break;
+    case 'plus': setSpeed(i, sec.speed + 10); break;
+    case 'split': splitAt((sec.start + sec.end) / 2); break;
+    case 'join': joinNext(i); break;
+  }
+});
+ui.secList.addEventListener('input', e => {
+  if (e.target.dataset.act !== 'range') return;
+  setSpeed(+e.target.closest('.sec').dataset.i, +e.target.value, true);
+});
+
+$('#quickA').insertAdjacentHTML('beforeend', QUICK_A.map(v => `<button type="button" class="chip" data-v="${v}">${v}</button>`).join(''));
+$('#quickA').addEventListener('click', e => {
+  const b = e.target.closest('[data-v]');
+  if (!b) return;
+  state.sections.forEach(s => { if (s.cls === 'A') s.speed = +b.dataset.v; });
+  sectionsChanged(true);
+  toast(`Alle Autobahn-Abschnitte auf ${b.dataset.v} km/h`);
+});
+$('#btnResetSpeeds').addEventListener('click', () => {
+  state.sections.forEach(s => { s.speed = s.def; });
+  sectionsChanged(true);
+  toast('Alle Abschnitte auf Richtwert gesetzt');
+});
+function setSplitMode(on) {
+  state.splitMode = on;
+  document.body.classList.toggle('splitting', on);
+  $('#splitBanner').hidden = !on;
+  $('#btnSplitMode').setAttribute('aria-pressed', String(on));
+  if (on) setFollow(false);
+}
+$('#btnSplitMode').addEventListener('click', () => setSplitMode(!state.splitMode));
+$('#btnSplitDone').addEventListener('click', () => setSplitMode(false));
+
+map.on('click', e => {
+  if (!state.route) return;
+  const hit = nearestOnRoute(e.latlng);
+  if (state.splitMode) {
+    if (hit.d > 40) { toast('Tippe direkt auf die Route'); return; }
+    splitAt(hit.s);
+  } else if (hit.d <= 22) selectSection(sectionIndexAt(hit.s), true);
+});
+map.on('dragstart', () => { if (sim.follow) setFollow(false); });
+
+/* ---------- Diagramm ---------- */
+function drawChart() {
+  const cv = $('#chart'), P = state.P;
+  if (!P || activeTab !== 'stats') return;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const col = { fg: cssVar('--fg'), muted: cssVar('--muted'), line: cssVar('--line'), accent: cssVar('--accent') };
+  const L_ = state.route.total, padL = 32, padR = 10, padT = 8, padB = 20, pw = w - padL - padR, ph = h - padT - padB;
+  let vmax = 0;
+  for (const s of state.sections) vmax = Math.max(vmax, s.speed);
+  vmax = Math.max(60, Math.ceil(vmax / 50) * 50);
+  const X = s => padL + s / L_ * pw, Y = v => padT + ph - v / vmax * ph;
+  ctx.font = `500 10px ${cssVar('--font-ui')}`;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = col.line; ctx.fillStyle = col.muted;
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  const vStep = vmax > 150 ? 50 : 25;
+  for (let v = 0; v <= vmax; v += vStep) {
+    const y = Math.round(Y(v)) + .5;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillText(String(v), padL - 6, y);
+  }
+  const kmTotal = L_ / 1000;
+  const xs = [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500].find(v => kmTotal / v <= 6) || 1000;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  for (let k = 0; k <= kmTotal + 1e-9; k += xs) ctx.fillText(nf1.format(k).replace(/,0$/, ''), X(k * 1000), h - padB + 5);
+  ctx.setLineDash([2, 3]);
+  for (const s of state.sections.slice(1)) { const x = Math.round(X(s.start)) + .5; ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke(); }
+  ctx.strokeStyle = col.muted; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  state.sections.forEach((s, i) => { const y = Y(s.speed); if (i === 0) ctx.moveTo(X(s.start), y); else ctx.lineTo(X(s.start), y); ctx.lineTo(X(s.end), y); });
+  ctx.stroke(); ctx.setLineDash([]);
+  const stride = Math.max(1, Math.floor(P.n / (pw * 2)));
+  const curve = () => { for (let k = 0; k < P.n; k += stride) ctx.lineTo(X(P.S[k]), Y(P.V[k] * 3.6)); ctx.lineTo(X(L_), Y(0)); };
+  ctx.beginPath(); ctx.moveTo(X(0), Y(0)); curve(); ctx.closePath();
+  ctx.globalAlpha = .2; ctx.fillStyle = col.accent; ctx.fill(); ctx.globalAlpha = 1;
+  ctx.beginPath(); ctx.moveTo(X(0), Y(0)); curve();
+  ctx.strokeStyle = col.accent; ctx.lineWidth = 1.6; ctx.stroke();
+  const at = atTime(P, sim.t), cx = X(at.s);
+  ctx.strokeStyle = col.fg; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, padT + ph); ctx.stroke();
+  ctx.fillStyle = col.fg; ctx.beginPath(); ctx.arc(cx, Y(at.v * 3.6), 3.5, 0, Math.PI * 2); ctx.fill();
+}
+window.addEventListener('resize', () => drawChart());
+
+/* ---------- Route laden ---------- */
+function setMsg(text, isError) { ui.msg.textContent = text || ''; ui.msg.classList.toggle('error', !!isError); }
+async function resolveInput(input) {
+  if (input._place) return input._place;
+  const q = input.value.trim();
+  const p = await geocode(q, map.getCenter());
+  input._place = p;
+  return p;
+}
+async function calcRoute() {
+  const token = ++routeToken;
+  const from = ui.inFrom.value.trim(), via = ui.inVia.value.trim(), to = ui.inTo.value.trim();
+  if (!from || !to) { setMsg('Bitte Start und Ziel eingeben.', true); return; }
+  pause();
+  setMsg('Orte werden gesucht …');
+  $('#btnCalc').disabled = true;
+  try {
+    const [a, v, b] = await Promise.all([resolveInput(ui.inFrom), via ? resolveInput(ui.inVia) : null, resolveInput(ui.inTo)]);
+    if (token !== routeToken) return;
+    setMsg('Route wird berechnet …');
+    const pts = [a, v, b].filter(Boolean);
+    const raw = await fetchRoutes(pts);
+    if (token !== routeToken) return;
+    const routes = raw.map(buildRoute).filter(r => r.total > 50 && r.coords.length > 1);
+    if (!routes.length) throw new Error('Start und Ziel liegen zu nah beieinander.');
+    state.routes = routes;
+    state.sig = pts.map(p => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`).join('|');
+    state.toLabel = b.label || to;
+    state.viaPoint = v ? [v.lat, v.lng] : null;
+    saveStore({ inputs: { from: { text: from, place: a }, via: { text: via, place: v }, to: { text: to, place: b } } });
+    const savedAlt = (loadStore().secs || {}).sig || '';
+    const altFromSave = savedAlt.startsWith(state.sig + '#') ? +savedAlt.split('#')[1] : 0;
+    selectAlt(altFromSave < routes.length ? altFromSave : 0, true);
+    setMsg('');
+  } catch (e) {
+    if (token === routeToken) setMsg(e.message || 'Die Route konnte nicht berechnet werden.', true);
+  } finally {
+    if (token === routeToken) $('#btnCalc').disabled = false;
+  }
+}
+function selectAlt(i, fit) {
+  pause();
+  state.altIdx = i;
+  state.route = state.routes[i];
+  const stored = loadStore().secs;
+  const okStored = stored && stored.sig === `${state.sig}#${i}` && Math.abs(stored.total - Math.round(state.route.total)) <= 1 && Array.isArray(stored.list) && stored.list.length;
+  state.sections = okStored ? stored.list : buildSections(state.route);
+  state.sel = -1; sim.t = 0; sim.s = 0; state.P = null; lastSecIdx = -1;
+  recompute();
+  renderAlts();
+  renderSections();
+  drawRoute();
+  updateSummary();
+  render({ force: true });
+  if (fit) fitRoute();
+}
+function renderAlts() {
+  $('#alts').innerHTML = state.routes.map((r, i) => `<button type="button" class="alt" data-i="${i}" aria-pressed="${i === state.altIdx}">
+    <span class="dot"></span>
+    <span><b>${km(r.total)} km</b> <span class="meta">· ca. ${words(r.osrmDur)} laut Routendienst</span><small>über ${esc(r.summary || 'Landstraßen')}</small></span>
+  </button>`).join('');
+}
+$('#alts').addEventListener('click', e => {
+  const b = e.target.closest('.alt');
+  if (b && +b.dataset.i !== state.altIdx) selectAlt(+b.dataset.i, true);
+});
+
+/* ---------- Eingaben mit Vorschlägen ---------- */
+function setupSuggest(input) {
+  const list = input.closest('.field').querySelector('.suggest');
+  let timer = 0, items = [], active = -1, req = 0;
+  const hide = () => { list.hidden = true; };
+  const paint = () => {
+    list.innerHTML = items.map((it, i) => `<li role="option" data-i="${i}" class="${i === active ? 'on' : ''}">${esc(it.name)}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</li>`).join('');
+  };
+  const choose = i => {
+    const it = items[i];
+    if (!it) return;
+    input.value = it.label;
+    input._place = { lat: it.lat, lng: it.lng, label: it.name };
+    hide();
+  };
+  input.addEventListener('input', () => {
+    input._place = null;
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 3) { hide(); return; }
+    timer = setTimeout(async () => {
+      const id = ++req;
+      try {
+        const res = await photon(q, 5, map.getCenter());
+        if (id !== req || document.activeElement !== input) return;
+        items = res; active = -1;
+        if (items.length) { paint(); list.hidden = false; } else hide();
+      } catch (e) { hide(); }
+    }, 280);
+  });
+  input.addEventListener('keydown', e => {
+    if (list.hidden) return;
+    if (e.key === 'ArrowDown') { active = Math.min(items.length - 1, active + 1); paint(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { active = Math.max(0, active - 1); paint(); e.preventDefault(); }
+    else if (e.key === 'Enter' && active >= 0) { e.preventDefault(); choose(active); }
+    else if (e.key === 'Escape') hide();
+  });
+  input.addEventListener('blur', () => setTimeout(hide, 180));
+  list.addEventListener('mousedown', e => e.preventDefault());
+  list.addEventListener('click', e => { const li = e.target.closest('li'); if (li) choose(+li.dataset.i); });
+}
+[ui.inFrom, ui.inVia, ui.inTo].forEach(setupSuggest);
+
+$('#routeForm').addEventListener('submit', e => { e.preventDefault(); document.activeElement.blur(); calcRoute(); });
+$('#btnSwap').addEventListener('click', () => {
+  const tv = ui.inFrom.value, tp = ui.inFrom._place;
+  ui.inFrom.value = ui.inTo.value; ui.inFrom._place = ui.inTo._place;
+  ui.inTo.value = tv; ui.inTo._place = tp;
+  calcRoute();
+});
+$('#btnLocate').addEventListener('click', () => {
+  if (!navigator.geolocation) { toast('Standort ist in diesem Browser nicht verfügbar'); return; }
+  toast('Standort wird bestimmt …');
+  navigator.geolocation.getCurrentPosition(p => {
+    ui.inFrom.value = 'Mein Standort';
+    ui.inFrom._place = { lat: p.coords.latitude, lng: p.coords.longitude, label: 'Mein Standort' };
+    toast('Standort übernommen');
+  }, () => toast('Standort nicht verfügbar. Die Seite braucht dafür https und deine Freigabe.'), { enableHighAccuracy: true, timeout: 12000 });
+});
+$('#examples').innerHTML = EXAMPLES.map((ex, i) => `<button type="button" class="chip" data-i="${i}">${esc(ex.from)}${ex.via ? ` über ${esc(ex.via)}` : ''} → ${esc(ex.to)}</button>`).join('');
+$('#examples').addEventListener('click', e => {
+  const b = e.target.closest('[data-i]');
+  if (!b) return;
+  const ex = EXAMPLES[+b.dataset.i];
+  ui.inFrom.value = ex.from; ui.inVia.value = ex.via || ''; ui.inTo.value = ex.to;
+  ui.inFrom._place = ui.inVia._place = ui.inTo._place = null;
+  calcRoute();
+});
+
+/* ---------- Bedienung ---------- */
+$('#mults').insertAdjacentHTML('beforeend', MULTS.map(m => `<button type="button" class="chip" data-m="${m}" aria-pressed="${m === settings.mult}">${m}×</button>`).join(''));
+$('#mults').addEventListener('click', e => {
+  const b = e.target.closest('[data-m]');
+  if (!b) return;
+  settings.mult = +b.dataset.m;
+  $$('[data-m]').forEach(x => x.setAttribute('aria-pressed', String(+x.dataset.m === settings.mult)));
+  saveStore({ settings });
+});
+$$('#styleSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.style === settings.style)));
+$('#styleSeg').addEventListener('click', e => {
+  const b = e.target.closest('[data-style]');
+  if (!b) return;
+  settings.style = b.dataset.style;
+  $$('#styleSeg button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  saveStore({ settings });
+  if (state.route) sectionsChanged(false);
+});
+$('#chkTurns').checked = settings.turns;
+$('#chkTurns').addEventListener('change', e => {
+  settings.turns = e.target.checked;
+  saveStore({ settings });
+  if (state.route) sectionsChanged(false);
+});
+const nowD = new Date();
+ui.dep.value = `${pad(nowD.getHours())}:${pad(nowD.getMinutes())}`;
+ui.dep.addEventListener('change', () => { updateSummary(); render({ force: true }); });
+
+ui.play.addEventListener('click', () => { if (sim.playing) pause(); else play(); });
+$('#btnReset').addEventListener('click', () => { pause(); sim.t = 0; render({ force: true, pan: sim.follow }); });
+ui.scrub.addEventListener('input', () => {
+  if (!state.P) return;
+  scrubbing = true;
+  sim.t = timeAt(state.P, ui.scrub.value / 1000 * state.route.total);
+  render({ force: true, pan: sim.follow });
+});
+ui.scrub.addEventListener('change', () => { scrubbing = false; });
+$('#btnFollow').addEventListener('click', () => setFollow(!sim.follow));
+$('#btnFit').addEventListener('click', () => { setFollow(false); fitRoute(); });
+
+function switchTab(name) {
+  activeTab = name;
+  $$('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
+  ['route', 'secs', 'stats'].forEach(n => { $(`#panel-${n}`).hidden = n !== name; });
+  $('#scroll').scrollTop = 0;
+  if (document.body.classList.contains('sheet-min')) toggleSheet(false);
+  drawChart();
+}
+$$('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+function toggleSheet(min) {
+  document.body.classList.toggle('sheet-min', min);
+  $('#btnSheet').setAttribute('aria-expanded', String(!min));
+}
+$('#btnSheet').addEventListener('click', () => toggleSheet(!document.body.classList.contains('sheet-min')));
+if ('ResizeObserver' in window) new ResizeObserver(() => map.invalidateSize({ pan: false })).observe($('#mapWrap'));
+
+let toastTimer = 0;
+function toast(text) {
+  const t = $('#toast');
+  t.textContent = text; t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 2800);
+}
+
+/* ---------- Start ---------- */
+setPlayIcon();
+const inp = saved.inputs;
+const restore = (input, v, fallback) => {
+  if (v && v.text) { input.value = v.text; input._place = v.place && v.place.lat != null ? v.place : null; }
+  else input.value = fallback;
+};
+restore(ui.inFrom, inp && inp.from, 'Nossen');
+restore(ui.inVia, inp && inp.via, '');
+restore(ui.inTo, inp && inp.to, 'Chemnitz');
+calcRoute();
+})();
+</script>
+</body>
+</html>
